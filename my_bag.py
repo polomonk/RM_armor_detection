@@ -25,7 +25,7 @@ class Node(object):
         return self.side[0] * self.side[1]
 
 
-class LinkedList(object):
+class RectangleLinkedList(object):
     def __init__(self, node=None):
         self.head = node
 
