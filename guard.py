@@ -12,14 +12,15 @@ import torch.nn.functional as F
 from torchvision import transforms
 
 
-class ImageGeometryDetection():
+class ImageGeometryDetection:
     def __init__(self):
         self.img = None
         self.Rect = RectangleLinkedList()  # 创建一个链表存放最小矩形的信息
         self.before_target_points = []  # 用来存放之前匹配的矩形中心点对
-        self.next_frame_coordinate = []  # 预测下一帧图像目标的坐标
+        self.next_coordinate = []  # 预测下一帧图像目标的坐标
         self.hit_coordinate = []  # 预测下n帧图像目标的坐标，即要打击的位置
         self.Track = 0  # 追踪标志，0丢失，1最优，2次优
+        self.optimal_node = None
         self.sub_optimal_node = None
         self.left_up_point, self.right_down_point = [], []
 
@@ -94,7 +95,7 @@ class ImageGeometryDetection():
         else:
             return -1
 
-    def parallel_weight(self, k, b, point, error=50):  # 用一个矩形的角度和中心点做直线，计算对应节点的中心点到直线的距离
+    def parallel_weight(self, k, b, point, error=50):  # 用一个矩形的长做中垂线，计算对应节点的中心点到直线的距离
         dist = abs(k * point[0] - point[1] + b) / np.sqrt(1 + k ** 2)
         if dist < error:  # 误差不超过error个像素点
             probability = 1 - pow(dist / error, 3)
@@ -102,7 +103,7 @@ class ImageGeometryDetection():
         else:
             return -1
 
-    def continue_weight(self, centre_point, error=30):
+    def continue_weight(self, centre_point, error=30):      # 连续性权重
         if self.Track == 0:
             return 0
         else:
@@ -119,7 +120,7 @@ class ImageGeometryDetection():
             return probability
 
     def prediction_weight(self, centre_point, error=20):
-        deviation = self.distance(centre_point, self.next_frame_coordinate)
+        deviation = self.distance(centre_point, self.next_coordinate)
         if deviation > error:
             return 0
         else:
@@ -151,7 +152,7 @@ class ImageGeometryDetection():
             compare_obj = compare_obj.next
 
     def kalman_filter(self, points, prediction=3):
-        self.next_frame_coordinate.clear()  # 清除之前的预测，开始新的预测
+        self.next_coordinate.clear()  # 清除之前的预测，开始新的预测
         self.hit_coordinate.clear()
         z_mat = np.mat(points)  # 定义x的初始状态
         for i in [0, 1]:  # 对x, y分别进行预测
@@ -166,9 +167,9 @@ class ImageGeometryDetection():
                 kalman = p_predict * h_mat.T / (h_mat * p_predict * h_mat.T + r_mat)
                 x_mat = x_predict + kalman * (z_mat[j, i] - h_mat * x_predict)
                 p_mat = (np.eye(2) - kalman * h_mat) * p_predict
-            self.next_frame_coordinate.append((f_mat * x_mat).tolist()[0][0])  # f_mat只预测下一帧的坐标
+            self.next_coordinate.append((f_mat * x_mat).tolist()[0][0])  # f_mat只预测下一帧的坐标
             self.hit_coordinate.append((np.mat([[1, prediction], [0, 1]]) * x_mat).tolist()[0][0])  # 预测count帧后的坐标
-        return self.next_frame_coordinate, self.hit_coordinate  # 返回预测下一帧的x, y 和 下count帧的x, y
+        return self.next_coordinate, self.hit_coordinate  # 返回预测下一帧的x, y 和 下count帧的x, y
 
     def show_result(self, target_node):  # 结果可视化
         if target_node.match_node is not None:
@@ -203,25 +204,27 @@ class ImageGeometryDetection():
             # cv2.line(img, right_up_point, left_up_point, color=color, thickness=2)
             # cv2.line(img, right_up_point, right_down_point, color=color, thickness=2)
 
-    def refresh_state(self, optimal_node):  # 更新状态
-        if optimal_node.match_node is not None:  # 找到了权重最大的一对点
-            optim_target_point = np.mean([optimal_node.point, optimal_node.match_node.point], axis=0)  # 当前一对点的中心位置
+    def refresh_state(self):  # 更新状态
+        if self.optimal_node.match_node is not None:  # 找到了权重最大的一对点
+            optim_target_point = np.mean([self.optimal_node.point, self.optimal_node.match_node.point],
+                                         axis=0)  # 当前一对点的中心位置
             # last_point = before_target_points[-1]  # 前一对点的中心位置
-            reference_error = abs((optimal_node.height + optimal_node.match_node.height) // 4 + abs(
-                optimal_node.height - optimal_node.match_node.height))  # 参考误差
-            if self.distance(self.next_frame_coordinate,
+            reference_error = abs((self.optimal_node.height + self.optimal_node.match_node.height) // 4 + abs(
+                self.optimal_node.height - self.optimal_node.match_node.height))  # 参考误差
+            if self.distance(self.next_coordinate,
                              optim_target_point) < reference_error:  # 如果当前位置和预测位置差距不大则认为找到了目标
                 self.Track = 1
                 # cv2.circle(img, tuple(np.int0(self.hit_coordinate)), 3, color=(122, 45, 200), thickness=3)  # 预测目标的位置
             else:
-                if self.sub_optimal_node is not None and self.sub_optimal_node.match_node is not None:      # 次优点与现在的位置差距也较大则认为目标丢失
+                # 次优点与现在的位置差距也较大则认为目标丢失
+                if self.sub_optimal_node is not None and self.sub_optimal_node.match_node is not None:
                     sub_target_point = np.mean([self.sub_optimal_node.point, self.sub_optimal_node.match_node.point],
                                                axis=0)  # 次优节点的中心位置
                     if self.distance(sub_target_point, optim_target_point) < reference_error:
                         self.Track = 2  # 继续追踪次优点
                         self.before_target_points.clear()  # 之前收集的点没有意义了
                         self.before_target_points.append(self.sub_optimal_node)  # 按顺序添加新的目标点
-                        self.before_target_points.append(optimal_node)
+                        self.before_target_points.append(self.optimal_node)
                 else:  # 目标丢失
                     self.Track = 0
                     self.before_target_points.clear()  # 之前收集的点没有意义了
@@ -252,43 +255,30 @@ class ImageGeometryDetection():
             cur = cur.next
 
         if duplicate_matched_node:  # 如果有重复匹配的情况
-            if duplicate_matched_node is not head.match_node and duplicate_matched_node is not head:    # 权重最大的节点可以确定就定为最优节点
-                optimal_node = head
-                self.sub_optimal_node = duplicate_matched_node
-            else:  # 把被重复匹配的节点保留，其余节点榨干剩余价值后删除
-                cur = self.Rect.head
-                while cur is not None:
-                    if cur.match_node is duplicate_matched_node or cur is duplicate_matched_node:
-                        pass
-                    else:
-                        if self.sub_optimal_node is None:  # 不满足条件的都不要了
-                            self.sub_optimal_node = cur
-                        self.Rect.remove(cur)
-                    cur = cur.next
+            # 权重最大的节点没有重复匹配的问题就可以确定为最优节点
+            if duplicate_matched_node is not head.match_node and duplicate_matched_node is not head:
+                self.optimal_node = head
+                if duplicate_matched_node is not head.next.match_node and duplicate_matched_node is not head.next:
+                    self.sub_optimal_node = head.next
+                else:
+                    self.sub_optimal_node = duplicate_matched_node
+            # 否则就让被多次匹配的节点作为最优节点
+            elif head is duplicate_matched_node or head.match_node is duplicate_matched_node:
+                self.optimal_node = duplicate_matched_node
+                if head.match_node is not head.next:  #
+                    self.sub_optimal_node = head.next
+                else:
+                    self.sub_optimal_node = head.next.next
 
-                while self.Rect.length() > 2:  # 去掉面积小的节点，留下2个面积最大的节点作为匹配节点
-                    min_area = self.Rect.head.area()
-                    min_area_node = self.Rect.head
-                    cur = self.Rect.head
-                    while cur is not None:
-                        if cur.area() < min_area:
-                            min_area = cur.area()
-                            min_area_node = cur
-                        cur = cur.next
-                    self.Rect.remove(min_area_node)
-
-                head = self.Rect.head  # 更新节点匹配情况
-                head.match_node = head.next
-                optimal_node = head
         else:
-            optimal_node = head
+            # 没重复匹配时的正常操作
+            self.optimal_node = head
             if head.next is not None and head.next is head.match_node:
                 self.sub_optimal_node = head.next.next
             else:
                 self.sub_optimal_node = head.next
-        return optimal_node
 
-    def drew_rect(self):
+    def drew_rect(self):        # 将目标部分重新验证不能用最小矩形框
         color = (0, 255, 0)
         cv2.line(self.img, (self.left_up_point[0], self.right_down_point[1]), self.left_up_point, color=color,
                  thickness=2)
@@ -299,9 +289,50 @@ class ImageGeometryDetection():
         cv2.line(self.img, (self.right_down_point[0], self.left_up_point[1]), self.right_down_point, color=color,
                  thickness=2)
 
+    def run(self):
+        self.Rect.clear()  # 清空链表开始操作新的帧
+        # img_cp = img.copy()  # 后续操作会破坏原图，先备份
+        img_binary = self.image_proprecessing()  # 预处理，提取目标颜色，会改变源图
+        self.find_contours(img_binary)  # 找到面积合适的最小矩形。用二值图找轮廓，画在原图上
+        self.judge_weight()  # 进行权重判断
+        self.find_optimal_node()
+    
+        if self.optimal_node is not None:  # 如果这帧图像拿到了最优节点
+            if self.distance(self.optimal_node.point, self.optimal_node.match_node.point) is not 0:
+                # show_result(optimal_node)  # 展示结果
+                # 把匹配矩形转化成矩形的坐标点
+                box1 = np.int0(cv2.boxPoints(
+                    (self.optimal_node.point, self.optimal_node.side, self.optimal_node.orig_angle)).tolist())
+                box2 = np.int0(cv2.boxPoints((self.optimal_node.match_node.point, self.optimal_node.match_node.side,
+                                              self.optimal_node.match_node.orig_angle)).tolist())
+                if box1[0][0] < box2[0][0]:  # 把坐标点转化成目标矩形的4个角点
+                    left_box = box1
+                    right_box = box2
+                else:
+                    left_box = box2
+                    right_box = box1
+                self.left_up_point = (
+                    min(left_box[0][0], left_box[1][0]), min(left_box[2][1], left_box[1][1], right_box[2][1]))
+                self.right_down_point = (
+                    max(right_box[3][0], right_box[2][0]), max(left_box[0][1], right_box[0][1], right_box[3][1]))
+            # 把最大权重的点放进历史目标点
+            self.before_target_points.append(
+                np.mean([self.optimal_node.point, self.optimal_node.match_node.point], axis=0).tolist())
+            if len(self.before_target_points) > 5:  # 用来预测的点数量，这里只保留4个
+                self.before_target_points.pop(0)
+            # 预测下一帧图和下n张图的坐标
+            self.next_coordinate, self.hit_coordinate = self.kalman_filter(self.before_target_points, prediction=3)
+            self.refresh_state()  # 更新追踪的状态位
+            if self.Track == 1:  # 追踪到了目标
+                cv2.circle(self.img, tuple(np.int0(self.hit_coordinate)), 3, color=(122, 45, 200),
+                           thickness=3)  # 画出预测目标的位置
+        else:
+            self.before_target_points.clear()  # 这帧图像没有目标则清空之前保留的坐标点
+    
 
-class LoadNet():
+class LoadNet:
     def __init__(self):
+        # 加载网络模型需要网络结构
         class ConvNet(nn.Module):
             def __init__(self):
                 super(ConvNet, self).__init__()
@@ -339,97 +370,56 @@ class LoadNet():
                 x = self.fc2(x)
                 x = torch.sigmoid(x)
                 return x
-
+        # 对图像进行格式化
         self.transform = transforms.Compose([
             transforms.Resize(150),
             transforms.ToTensor(),
             transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
         ])
+        # 加载神经网络模型
         self.model = ConvNet()
         self.model.load_state_dict(torch.load('dec.pth'))
-        self.DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model.to(self.DEVICE)
-        self.model.eval()
+        self.DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')      # 尽量使用GPU
+        self.model.to(self.DEVICE)      # 将模型放在设备上
+        self.model.eval()       # 固定模型的参数
 
     def image_verification(self, image):
-        image = cv2.resize(image, (150, 150))
+        image = cv2.resize(image, (150, 150))        # 将图像转换成训练集的格式进行验证
         image = Image.fromarray(image).convert("RGB")
-        data = self.transform(image).unsqueeze(0)
-        out = self.model(data.to(self.DEVICE)).to("cpu").item()
-        return out
-
-
-
-def main():
-    ImgDect.Rect.clear()  # 清空链表开始操作新的帧
-    # img_cp = img.copy()  # 后续操作会破坏原图，先备份
-    img_binary = ImgDect.image_proprecessing()  # 预处理，提取目标颜色，会改变源图
-    ImgDect.find_contours(img_binary)  # 找到面积合适的最小矩形。用二值图找轮廓，画在原图上
-    ImgDect.judge_weight()  # 进行权重判断
-    optimal_node = ImgDect.find_optimal_node()
-
-    if optimal_node is not None:  # 如果这帧图像拿到了最优节点
-        if ImgDect.distance(optimal_node.point, optimal_node.match_node.point) is not 0:
-            # show_result(optimal_node)  # 展示结果
-            # 把匹配矩形转化成矩形的坐标点
-            box1 = np.int0(cv2.boxPoints((optimal_node.point, optimal_node.side, optimal_node.orig_angle)).tolist())
-            box2 = np.int0(cv2.boxPoints((optimal_node.match_node.point, optimal_node.match_node.side,
-                                          optimal_node.match_node.orig_angle)).tolist())
-            if box1[0][0] < box2[0][0]:  # 把坐标点转化成目标矩形的4个角点
-                left_box = box1
-                right_box = box2
-            else:
-                left_box = box2
-                right_box = box1
-            ImgDect.left_up_point = (
-            min(left_box[0][0], left_box[1][0]), min(left_box[2][1], left_box[1][1], right_box[2][1]))
-            ImgDect.right_down_point = (
-            max(right_box[3][0], right_box[2][0]), max(left_box[0][1], right_box[0][1], right_box[3][1]))
-        # 把最大权重的点放进历史目标点
-        ImgDect.before_target_points.append(
-            np.mean([optimal_node.point, optimal_node.match_node.point], axis=0).tolist())
-        if len(ImgDect.before_target_points) > 5:  # 用来预测的点数量，这里只保留4个
-            ImgDect.before_target_points.pop(0)
-
-        ImgDect.next_frame_coordinate, ImgDect.hit_coordinate = ImgDect.kalman_filter(ImgDect.before_target_points,
-                                                                                      prediction=3)  # 预测下一帧图和下n张图的坐标
-        ImgDect.refresh_state(optimal_node)  # 更新追踪的状态位
-        if ImgDect.Track == 1:  # 追踪到了目标
-            cv2.circle(ImgDect.img, tuple(np.int0(ImgDect.hit_coordinate)), 3, color=(122, 45, 200),
-                       thickness=3)  # 画出预测目标的位置
-    else:
-        ImgDect.before_target_points.clear()  # 这帧图像没有目标则清空之前保留的坐标点
+        data = self.transform(image).unsqueeze(0)       # 保证维度一致
+        return self.model(data.to(self.DEVICE)).to("cpu").item()        # 最后要转回cpu上
 
 
 if __name__ == '__main__':
     import time
 
-    ImgDect = ImageGeometryDetection()
-
     print('loading model...')
     Net = LoadNet()
     print('model loading compeleted')
 
+    ImgDect = ImageGeometryDetection()
+
     apd = 10
     video = r'D:\Document\py\opencv\demo\red_video\text11.avi'
-    cap = cv2.VideoCapture(video)
+    cap = cv2.VideoCapture(video)       # 读取本地视频测试
     ret, img = cap.read()
     while ret:
         st = time.time()
         ImgDect.img = img
-        main()
+        ImgDect.run()
         torch.no_grad()
-        area2redetect = 0
-        dst = ImgDect.img[max(ImgDect.left_up_point[1] - apd, 0): min(ImgDect.right_down_point[1] + apd, img.shape[0]),
-              max(ImgDect.left_up_point[0] - apd, 0): min(ImgDect.right_down_point[0] + apd, img.shape[1])]
-
-        out = Net.image_verification(dst)
-        out = 0 if out < 0.5 else 1
-        if out == 0:
-            # cv2.rectangle(img, left_up_point, right_down_point, (0, 255, 0), 0)
-            ImgDect.drew_rect()
-        else:
-            pass
+        if len(ImgDect.left_up_point) is not 0:
+            # 验证部分的格式要与训练集相同
+            dst = ImgDect.img[
+                  max(ImgDect.left_up_point[1] - apd, 0): min(ImgDect.right_down_point[1] + apd, img.shape[0]),
+                  max(ImgDect.left_up_point[0] - apd, 0): min(ImgDect.right_down_point[0] + apd, img.shape[1])]
+            out = Net.image_verification(dst)       # 对可能目标进行再次确认
+            out = 0 if out < 0.5 else 1     # 自信度大于50%就认为是目标装甲
+            if out == 0:
+                # cv2.rectangle(img, left_up_point, right_down_point, (0, 255, 0), 0)
+                ImgDect.drew_rect()
+            else:
+                pass
         cv2.imshow('dst', img)
         cv2.waitKey(30)
         ret, img = cap.read()

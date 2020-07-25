@@ -108,18 +108,4 @@ class RectangleLinkedList(object):
 
 
 if __name__ is '__main__':
-    ll = LinkedList()
-    ll.append(1, (2, 3), 3)
-    ll.append((2, 3), (2, 3), 3)
-    ll.append((2, 3), (2, 3), 3)
-    ll.append((2, 3), (2, 3), 3)
-    ll.append((2, 3), (2, 3), 3)
-    cur = ll.head
-    i = 0
-    while cur is not None:
-        cur.weight += i
-        i += 1
-        cur = cur.next
-    ll.sort()
-    ll.travel()
-
+    pass
