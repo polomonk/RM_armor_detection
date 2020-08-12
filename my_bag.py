@@ -76,27 +76,106 @@ class RectangleLinkedList(object):
         return cur
 
     def sort_by_weight(self):
-        for i in range(self.length()-1):
+        def swap(node1, node2):
+            if node1 is node2:
+                return
+            pre1 = self.head
+            per2 = self.head
             cur = self.head
-            while cur is not None and cur.next is not None:
-                after = cur.next
-                if cur is self.head:
-                    if cur.weight < after.weight:
-                        self.head = after
-                        cur.next = after.next
-                        after.next = cur
-                    else:
-                        cur = cur.next
+            while cur.next is not None:
+                if cur.next is node1:
+                    pre1 = cur
+                elif cur.next is node2:
+                    pre2 = cur
+                cur = cur.next
+            if node1 is self.head:
+                if node1.next is node2:
+                    node1.next = node2.next
+                    node2.next = node1
+                    self.head = node2
                 else:
-                    if cur.weight < after.weight:
-                        before = self.head
-                        while before.next is not cur:
-                            before = before.next
-                        before.next = after
-                        cur.next = after.next
-                        after.next = cur
-                    else:
-                        cur = cur.next
+                    nxt1 = node1.next
+                    pre2.next = node1
+                    node1.next = node2.next
+                    node2.next = nxt1
+                    self.head = node2
+            elif node2 is self.head:
+                if node2.next is node1:
+                    node2.next = node1.next
+                    node1.next = node2
+                    self.head = node1
+                else:
+                    nxt2 = node2.next
+                    pre1.next = node2
+                    node2.next = node1.next
+                    node1.next = nxt2
+                    self.head = node1
+            else:
+                if node1.next is node2:
+                    pre1.next = node2
+                    node1.next = node2.next
+                    node2.next = node1
+                elif node2.next is node1:
+                    pre2.next = node1
+                    node2.next = node1.next
+                    node1.next = node2
+                else:
+                    nxt1 = node1.next
+                    pre1.next = node2
+                    pre2.next = node1
+                    node1.next = node2.next
+                    node2.next = nxt1
+
+        def sort_step(bgn, end):
+            if bgn is end or bgn.next is end:
+                return bgn
+
+            key = bgn.weight
+            up = bgn  # pup指针的移动比pdw快
+            dw = bgn
+            while up is not end:
+                if up.weight > key:
+                    dw = dw.next
+                    swap(up, dw)
+                    up, dw = dw, up
+                up = up.next
+            swap(bgn, dw)
+            bgn, dw = dw, bgn
+            return bgn, dw
+
+        def sort(bgn, end):
+            if bgn is end or bgn.next is end:
+                return
+            bgn, mid = sort_step(bgn, end)
+            sort(bgn, mid)
+            sort(mid.next, end)
+
+        bgn = self.head
+        end = self.head
+        while end is not None:
+            end = end.next
+        sort(bgn, end)
+        # for i in range(self.length()-1):
+        #     cur = self.head
+        #     while cur is not None and cur.next is not None:
+        #         after = cur.next
+        #         if cur is self.head:
+        #             if cur.weight < after.weight:
+        #                 self.head = after
+        #                 cur.next = after.next
+        #                 after.next = cur
+        #             else:
+        #                 cur = cur.next
+        #         else:
+        #             if cur.weight < after.weight:
+        #                 before = self.head
+        #                 while before.next is not cur:
+        #                     before = before.next
+        #                 before.next = after
+        #                 cur.next = after.next
+        #                 after.next = cur
+        #             else:
+        #                 cur = cur.next
 
     def travel(self):
         cur = self.head

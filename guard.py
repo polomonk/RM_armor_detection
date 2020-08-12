@@ -24,13 +24,17 @@ class ImageGeometryDetection:
         self.sub_optimal_node = None
         self.left_up_point, self.right_down_point = [], []
 
-    def distance(self, point1, point2):  # 测量两个点直接的距离
+    def frame_refresh(self, image):
+        self.img = image
+
+    @staticmethod
+    def distance(point1, point2):  # 测量两个点直接的距离
         return np.sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2)
 
-    def image_proprecessing(self):  # 提取图像中的颜色并2值化
+    def image_processing(self):  # 提取图像中的颜色并2值化
         lower_bgr = np.array([150, 100, 150])  # bgr很亮部分的上下限
         upper_bgr = np.array([220, 220, 255])
-        mask = cv2.inRange(img, lowerb=lower_bgr, upperb=upper_bgr)
+        mask = cv2.inRange(self.img, lowerb=lower_bgr, upperb=upper_bgr)
         mask = cv2.GaussianBlur(mask, (3, 3), 0)  # 平滑图像
         _, binary = cv2.threshold(mask, 200, 255, cv2.THRESH_BINARY)  # 限制亮度
 
@@ -64,23 +68,17 @@ class ImageGeometryDetection:
         h_max = max(point2[1], point1[1])
         return img[h_min - 100:h_max + 100, w_min - 200:w_max + 200]
 
-    def area_weight(self, std_area, comp_w, comp_h, error=20):  # 对面积进行限制
-        if comp_h * (comp_w - error) < std_area < comp_h * (comp_w + error):
-            return 1
-        else:
-            return 0
-
-    def deviation_weight(self, std, comp, error=0.3):  # 对高度比限制
+    def deviation_weight(self, std, cmp, error=0.3):  # 对高度比限制
         if error < 0 or error > 1:
             return 0
-        elif (1 - error) < std.height / comp.height < 1 / (1 - error):
+        elif (1 - error) < std.height / cmp.height < 1 / (1 - error):
             weight = 1
         else:
             weight = -1
 
-        dist = self.distance(std.point, comp.point)
-        hv = (std.height + comp.height) / 2
-        dh = abs(std.height - comp.height)
+        dist = self.distance(std.point, cmp.point)
+        hv = (std.height + cmp.height) / 2
+        dh = abs(std.height - cmp.height)
         value = (hv * 2.5) / (dist * (1 + np.sin(dh / hv * 3.14 / 2)))
         if (1 - error) < value < (1 + error):
             weight -= abs(1 - value) ** 1
@@ -127,7 +125,7 @@ class ImageGeometryDetection:
             probability = 1 - pow(deviation / error, 3)
             return probability
 
-    def judge_weight(self):  # 决策函数
+    def weight_sum(self):  # 决策函数
         compare_obj = self.Rect.head
         while compare_obj is not None:  # 2层循环把所有匹配情况都遍历一遍
             cur = self.Rect.head
@@ -152,24 +150,21 @@ class ImageGeometryDetection:
             compare_obj = compare_obj.next
 
     def kalman_filter(self, points, prediction=3):
-        self.next_coordinate.clear()  # 清除之前的预测，开始新的预测
-        self.hit_coordinate.clear()
-        z_mat = np.mat(points)  # 定义x的初始状态
-        for i in [0, 1]:  # 对x, y分别进行预测
-            x_mat = np.mat([[points[0][i], 0], [0, 0]])  # 定义初始状态协方差矩阵
-            p_mat = np.mat(np.eye(2))  # 定义状态转移矩阵，因为每秒钟采一次样，所以delta_t = 1
-            f_mat = np.mat([[1, 1], [0, 1]])  # 定义观测矩阵
-            h_mat = np.mat([1, 0])  # 定义观测噪声协方差
-            r_mat = np.mat([0.1])  # 定义状态转移矩阵噪声
-            for j in range(len(points)):
-                x_predict = f_mat * x_mat
-                p_predict = f_mat * p_mat * f_mat.T
-                kalman = p_predict * h_mat.T / (h_mat * p_predict * h_mat.T + r_mat)
-                x_mat = x_predict + kalman * (z_mat[j, i] - h_mat * x_predict)
-                p_mat = (np.eye(2) - kalman * h_mat) * p_predict
-            self.next_coordinate.append((f_mat * x_mat).tolist()[0][0])  # f_mat只预测下一帧的坐标
-            self.hit_coordinate.append((np.mat([[1, prediction], [0, 1]]) * x_mat).tolist()[0][0])  # 预测count帧后的坐标
-        return self.next_coordinate, self.hit_coordinate  # 返回预测下一帧的x, y 和 下count帧的x, y
+        x_mat = np.mat([0., 0., 0., 0.]).T      # 初始状态矩阵
+        h_mat = np.mat([[1, 0, 0, 0], [0, 1, 0, 0]])        # 观测矩阵
+        p_mat = np.mat(np.eye(4))*1000  # initial uncertainty
+        r_mat = np.mat([0.1])       # 观察噪声
+        f_mat = np.mat([[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]])        # 定义观测矩阵，因为每秒钟采一次样，所以delta_t = 1
+        for i in range(len(points)):
+            x_predict = f_mat * x_mat       # 预测下一个时间的位置
+            p_predict = f_mat * p_mat * f_mat.T + r_mat     # 噪声协方差矩阵
+            s_mat = h_mat * p_predict * h_mat.T + r_mat  # residual convariance     状态转移噪声向量
+            k_mat = p_predict * h_mat.T * s_mat.I  # Kalman gain
+            x_mat = x_predict + k_mat * (np.mat(points[i]) - h_mat * x_predict)     # 最优估计值
+            i_mat = np.mat(np.eye(f_mat.shape[0]))  # identity mat
+            p_mat = (i_mat - k_mat * h_mat) * p_predict
+        self.next_coordinate = x_mat.tolist()[0]  # f_mat只预测下一帧的坐标
+        self.hit_coordinate = (np.mat([[1, 0, prediction, 0], [0, 1, 0, prediction], [0, 0, 0, 0], [0, 0, 0, 0]]) * x_mat).tolist()[0]  # 预测n帧后的坐标
 
     def show_result(self, target_node):  # 结果可视化
         if target_node.match_node is not None:
@@ -186,7 +181,7 @@ class ImageGeometryDetection:
                 right_box = box1
             self.left_up_point = [min(left_box[0][0], left_box[3][0]), min(left_box[3][1], right_box[2][1])]
             self.right_down_point = [max(right_box[1][0], right_box[2][0]), max(left_box[0][1], right_box[1][1])]
-            # if distance(left_box[0], left_box[1]) > distance(left_box[0], left_box[3]):
+            # if distance(left_box[0], left_box[1]) > distance(left_box[0], left_box[3]):       # 位姿估计法会用到
             #     left_down_point = tuple(left_box[0])
             #     left_up_point = tuple(left_box[1])
             # else:
@@ -205,31 +200,31 @@ class ImageGeometryDetection:
             # cv2.line(img, right_up_point, right_down_point, color=color, thickness=2)
 
     def refresh_state(self):  # 更新状态
-        if self.optimal_node.match_node is not None:  # 找到了权重最大的一对点
-            optim_target_point = np.mean([self.optimal_node.point, self.optimal_node.match_node.point],
-                                         axis=0)  # 当前一对点的中心位置
-            # last_point = before_target_points[-1]  # 前一对点的中心位置
-            reference_error = abs((self.optimal_node.height + self.optimal_node.match_node.height) // 4 + abs(
-                self.optimal_node.height - self.optimal_node.match_node.height))  # 参考误差
-            if self.distance(self.next_coordinate,
-                             optim_target_point) < reference_error:  # 如果当前位置和预测位置差距不大则认为找到了目标
-                self.Track = 1
-                # cv2.circle(img, tuple(np.int0(self.hit_coordinate)), 3, color=(122, 45, 200), thickness=3)  # 预测目标的位置
-            else:
-                # 次优点与现在的位置差距也较大则认为目标丢失
-                if self.sub_optimal_node is not None and self.sub_optimal_node.match_node is not None:
-                    sub_target_point = np.mean([self.sub_optimal_node.point, self.sub_optimal_node.match_node.point],
-                                               axis=0)  # 次优节点的中心位置
-                    if self.distance(sub_target_point, optim_target_point) < reference_error:
-                        self.Track = 2  # 继续追踪次优点
-                        self.before_target_points.clear()  # 之前收集的点没有意义了
-                        self.before_target_points.append(self.sub_optimal_node)  # 按顺序添加新的目标点
-                        self.before_target_points.append(self.optimal_node)
-                else:  # 目标丢失
-                    self.Track = 0
+        # if self.optimal_node.match_node is not None:  # 找到了权重最大的一对点
+        optim_target_point = np.mean([self.optimal_node.point, self.optimal_node.match_node.point],
+                                     axis=0)  # 当前一对点的中心位置
+        # last_point = before_target_points[-1]  # 前一对点的中心位置
+        reference_error = abs((self.optimal_node.height + self.optimal_node.match_node.height) // 4 + abs(
+            self.optimal_node.height - self.optimal_node.match_node.height))  # 参考误差
+        # 如果当前位置和预测位置差距不大则认为找到了目标
+        if self.distance(self.next_coordinate, optim_target_point) < reference_error:
+            self.Track = 1
+            cv2.circle(img, tuple(np.int0(self.hit_coordinate)), 3, color=(122, 45, 200), thickness=3)  # 预测目标的位置
+        else:
+            # 次优点与现在的位置差距也较大则认为目标丢失
+            if self.sub_optimal_node is not None and self.sub_optimal_node.match_node is not None:
+                sub_target_point = np.mean([self.sub_optimal_node.point, self.sub_optimal_node.match_node.point],
+                                           axis=0)  # 次优节点的中心位置
+                if self.distance(sub_target_point, optim_target_point) < reference_error:
+                    self.Track = 2  # 继续追踪次优点
                     self.before_target_points.clear()  # 之前收集的点没有意义了
+                    self.before_target_points.append(self.sub_optimal_node.point)  # 按顺序添加新的目标点
+                    self.before_target_points.append(self.optimal_node.point)
+            else:  # 目标丢失
+                self.Track = 0
+                self.before_target_points.clear()  # 之前收集的点没有意义了
 
-    def find_optimal_node(self, low_limit=4):
+    def judge(self, low_limit=4):
         self.sub_optimal_node = None
         self.Rect.sort_by_weight()  # 按权重从大到小排列desc
         head = self.Rect.head
@@ -292,10 +287,10 @@ class ImageGeometryDetection:
     def run(self):
         self.Rect.clear()  # 清空链表开始操作新的帧
         # img_cp = img.copy()  # 后续操作会破坏原图，先备份
-        img_binary = self.image_proprecessing()  # 预处理，提取目标颜色，会改变源图
+        img_binary = self.image_processing()  # 预处理，提取目标颜色，会改变源图
         self.find_contours(img_binary)  # 找到面积合适的最小矩形。用二值图找轮廓，画在原图上
-        self.judge_weight()  # 进行权重判断
-        self.find_optimal_node()
+        self.weight_sum()  # 进行权重累加
+        self.judge()        # 判断最优的节点
     
         if self.optimal_node is not None:  # 如果这帧图像拿到了最优节点
             if self.distance(self.optimal_node.point, self.optimal_node.match_node.point) is not 0:
@@ -321,11 +316,10 @@ class ImageGeometryDetection:
             if len(self.before_target_points) > 5:  # 用来预测的点数量，这里只保留4个
                 self.before_target_points.pop(0)
             # 预测下一帧图和下n张图的坐标
-            self.next_coordinate, self.hit_coordinate = self.kalman_filter(self.before_target_points, prediction=3)
+            self.kalman_filter(self.before_target_points, prediction=3)
             self.refresh_state()  # 更新追踪的状态位
-            if self.Track == 1:  # 追踪到了目标
-                cv2.circle(self.img, tuple(np.int0(self.hit_coordinate)), 3, color=(122, 45, 200),
-                           thickness=3)  # 画出预测目标的位置
+            if self.Track == 1:  # 追踪到了目标  # 画出预测目标的位置
+                cv2.circle(self.img, tuple(np.int0(self.hit_coordinate)), 3, color=(122, 45, 200), thickness=3)
         else:
             self.before_target_points.clear()  # 这帧图像没有目标则清空之前保留的坐标点
     
@@ -405,7 +399,7 @@ if __name__ == '__main__':
     ret, img = cap.read()
     while ret:
         st = time.time()
-        ImgDect.img = img
+        ImgDect.frame_refresh(img)
         ImgDect.run()
         torch.no_grad()
         if len(ImgDect.left_up_point) is not 0:
@@ -420,6 +414,7 @@ if __name__ == '__main__':
                 ImgDect.drew_rect()
             else:
                 pass
+        cv2.rectangle(ImgDect.img, ImgDect.left_up_point, ImgDect.right_down_point, (0, 255, 0), 0)
         cv2.imshow('dst', img)
         cv2.waitKey(30)
         ret, img = cap.read()
