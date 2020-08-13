@@ -12,7 +12,7 @@
 - **可见，有很多的特征都可以用于装甲识别。对此可以分别对各项指标进行加权，最后取出权值最高的一对点作为最优目标**
 - 在最后我还训练了一个神经网络模型再次过滤
 ### 流程图
-[!img](https://github.com/polomonk/RM_armor_detection/blob/master/images/dst.png)
+[!img](https://github.com/polomonk/RM_armor_detection/blob/master/images/flow.png)
 <!--
 ```flow
 st=>start: 开始
@@ -29,3 +29,5 @@ cond(no)->op3->e
 cond(yes)->sub1(left)->op2
 ```
 -->
+### 识别结果
+[!img](https://github.com/polomonk/RM_armor_detection/blob/master/images/dst.png)
