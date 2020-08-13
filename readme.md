@@ -23,6 +23,6 @@ sub1=>subroutine: 保存最优轮廓
 e=>end: 结束
 
 st->io->op1->op2->cond
-cond(no)->sub2->e
-cond(yes)->sub1->op2
+cond(no)->op3->e
+cond(yes)->sub1(left)->op2
 ```
