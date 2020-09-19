@@ -3,6 +3,7 @@
     guard.py
 """
 from my_bag import *
+from cam_pos import pnp_pose
 import numpy as np
 import cv2
 from PIL import Image
@@ -13,6 +14,14 @@ from torchvision import transforms
 
 
 class ImageGeometryDetection:
+    @staticmethod
+    class PosePoints:
+        def __init__(self):
+            self.left_up_point = []
+            self.right_up_point = []
+            self.right_down_point = []
+            self.left_down_point = []
+
     def __init__(self):
         self.img = None
         self.Rect = RectangleLinkedList()  # 创建一个链表存放最小矩形的信息
@@ -23,6 +32,8 @@ class ImageGeometryDetection:
         self.optimal_node = None
         self.sub_optimal_node = None
         self.left_up_point, self.right_down_point = [], []
+        self.pose_points = self.PosePoints()
+        self.tmp = None
 
     def frame_refresh(self, image):
         self.img = image
@@ -181,6 +192,14 @@ class ImageGeometryDetection:
                 right_box = box1
             self.left_up_point = [min(left_box[0][0], left_box[3][0]), min(left_box[3][1], right_box[2][1])]
             self.right_down_point = [max(right_box[1][0], right_box[2][0]), max(left_box[0][1], right_box[1][1])]
+            self.pose_points.left_up_point = left_box[1]
+            self.pose_points.left_down_point = left_box[0]
+            self.pose_points.right_up_point = right_box[2]
+            self.pose_points.right_down_point = right_box[3]
+            self.tmp = cv2.minAreaRect(np.array(self.pose_points.left_down_point,
+                                                self.pose_points.left_up_point,
+                                                self.pose_points.right_up_point,
+                                                self.pose_points.right_down_point))
             # if distance(left_box[0], left_box[1]) > distance(left_box[0], left_box[3]):       # 位姿估计法会用到
             #     left_down_point = tuple(left_box[0])
             #     left_up_point = tuple(left_box[1])
@@ -386,35 +405,45 @@ class LoadNet:
 
 if __name__ == '__main__':
     import time
-
-    print('loading model...')
-    Net = LoadNet()
-    print('model loading compeleted')
+    LOAD_MODEL = False
+    if LOAD_MODEL:
+        print('loading model...')
+        Net = LoadNet()
+        print('model loading compeleted')
 
     ImgDect = ImageGeometryDetection()
 
-    apd = 10
     video = r'D:\Document\py\opencv\demo\red_video\text11.avi'
     cap = cv2.VideoCapture(video)       # 读取本地视频测试
     ret, img = cap.read()
+    apd = 10
     while ret:
         st = time.time()
         ImgDect.frame_refresh(img)
         ImgDect.run()
-        torch.no_grad()
-        if len(ImgDect.left_up_point) is not 0:
-            # 验证部分的格式要与训练集相同
-            dst = ImgDect.img[
-                  max(ImgDect.left_up_point[1] - apd, 0): min(ImgDect.right_down_point[1] + apd, img.shape[0]),
-                  max(ImgDect.left_up_point[0] - apd, 0): min(ImgDect.right_down_point[0] + apd, img.shape[1])]
-            out = Net.image_verification(dst)       # 对可能目标进行再次确认
-            out = 0 if out < 0.5 else 1     # 自信度大于50%就认为是目标装甲
-            if out == 0:
-                # cv2.rectangle(img, left_up_point, right_down_point, (0, 255, 0), 0)
-                ImgDect.drew_rect()
-            else:
-                pass
+        if LOAD_MODEL:
+            torch.no_grad()
+            if len(ImgDect.left_up_point) is not 0:
+                # 验证部分的格式要与训练集相同
+                dst = ImgDect.img[
+                      max(ImgDect.left_up_point[1] - apd, 0): min(ImgDect.right_down_point[1] + apd, img.shape[0]),
+                      max(ImgDect.left_up_point[0] - apd, 0): min(ImgDect.right_down_point[0] + apd, img.shape[1])]
+                out = Net.image_verification(dst)       # 对可能目标进行再次确认
+                out = 0 if out < 0.5 else 1     # 自信度大于50%就认为是目标装甲
+                if out == 0:
+                    # cv2.rectangle(img, left_up_point, right_down_point, (0, 255, 0), 0)
+                    ImgDect.drew_rect()
+                else:
+                    pass
         cv2.rectangle(ImgDect.img, ImgDect.left_up_point, ImgDect.right_down_point, (0, 255, 0), 0)
+
+        # box = np.int0(cv2.boxPoints(ImgDect.tmp))
+
+        ImgDect.tmp[0] = ImgDect.next_coordinate
+        box = np.int0(cv2.boxPoints(ImgDect.tmp))
+
+        pose = pnp_pose(box[0])
+        print("x,y,z轴位置：{}".format(pose))
         cv2.imshow('dst', img)
         cv2.waitKey(30)
         ret, img = cap.read()
